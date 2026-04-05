@@ -1,7 +1,6 @@
 /**
- * Enhance a product photo using Vertex AI Gemini (image-to-image generation).
- * Sends the original photo + styling prompt to gemini-3.1-flash-image-preview
- * and returns the AI-generated styled version.
+ * Enhance a product photo for Instagram.
+ * Supports BytePlus Seedream 4.5 (primary) with Vertex AI Gemini fallback.
  * Throws on failure instead of silently returning original.
  */
 export async function enhanceImage(
@@ -11,30 +10,112 @@ export async function enhanceImage(
   postContext?: string
 ): Promise<{ original: string; styled: string }> {
   const originalDataUri = `data:image/jpeg;base64,${imageBase64}`;
-  const apiKey = process.env.VERTEX_AI_API_KEY;
 
-  if (!apiKey) {
-    throw new Error("VERTEX_AI_API_KEY not configured — cannot enhance image");
+  // Try BytePlus Seedream first, fall back to Gemini
+  const byteplusKey = process.env.ARK_API_KEY;
+  if (byteplusKey) {
+    return enhanceWithSeedream(imageBase64, originalDataUri, prompt, persona, byteplusKey);
   }
 
-  const contextDesc = postContext
-    ? `This is for a social media post that says: "${postContext.slice(0, 300)}".`
-    : "";
+  const geminiKey = process.env.VERTEX_AI_API_KEY;
+  if (geminiKey) {
+    return enhanceWithGemini(imageBase64, originalDataUri, prompt, persona, geminiKey);
+  }
 
-  const editPrompt = [
-    `Transform this product photo into a stunning, magazine-quality Instagram post.`,
-    `Context: ${prompt}. Brand style: ${persona}.`,
-    contextDesc,
-    `IMPORTANT EDITS TO MAKE:`,
-    `- Add dramatic warm golden-hour lighting with visible light rays or lens flare`,
-    `- Add rich, cinematic color grading (warm highlights, cool shadows)`,
-    `- Add subtle steam, sparkle, or glow effects to make the product pop`,
-    `- Enhance depth with a soft bokeh/blurred background`,
-    `- Boost saturation and contrast for an appetizing, premium look`,
-    `- Add a subtle vignette around the edges`,
-    `The product must remain clearly recognizable but the overall mood and styling should be dramatically different from a casual phone photo.`,
+  throw new Error("No image API key configured (ARK_API_KEY or VERTEX_AI_API_KEY)");
+}
+
+/** Build a styling-only prompt — NO caption text, NO text rendering */
+function buildStylePrompt(prompt: string, persona: string): string {
+  return [
+    `Reimagine this product photo as a stunning, professional Instagram-worthy image.`,
+    `Product context: ${prompt}. Brand style: ${persona}.`,
+    `Apply these photographic enhancements:`,
+    `- Professional studio lighting with warm golden tones`,
+    `- Rich cinematic color grading`,
+    `- Subtle steam, sparkle, or glow effects on the product`,
+    `- Soft bokeh/blurred background for depth`,
+    `- High saturation and contrast for an appetizing, premium look`,
+    `CRITICAL: DO NOT add any text, captions, watermarks, hashtags, logos, or overlays on the image.`,
+    `CRITICAL: Output ONLY a photograph with zero text or writing anywhere.`,
+    `The product must be clearly recognizable as the same item but shot in a dramatically different, professional style.`,
   ].join(" ");
+}
 
+/* ------------------------------------------------------------------ */
+/*  BytePlus Seedream 4.5                                             */
+/* ------------------------------------------------------------------ */
+
+async function enhanceWithSeedream(
+  imageBase64: string,
+  originalDataUri: string,
+  prompt: string,
+  persona: string,
+  apiKey: string
+): Promise<{ original: string; styled: string }> {
+  const stylePrompt = buildStylePrompt(prompt, persona);
+
+  // Seedream 4.5 image-to-image via BytePlus Ark API
+  const url = "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations";
+
+  const body = {
+    model: "seedream-4-5-251128",
+    prompt: stylePrompt,
+    image: imageBase64,
+    size: "1024x1024",
+    response_format: "b64_json",
+    n: 1,
+  };
+
+  console.log("[ImageEdit] Sending to BytePlus Seedream 4.5, prompt length:", stylePrompt.length);
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    console.error("[ImageEdit] BytePlus error:", response.status, errBody.slice(0, 500));
+    throw new Error(`BytePlus Seedream failed (${response.status}): ${errBody.slice(0, 200)}`);
+  }
+
+  const data = await response.json();
+  const b64 = data?.data?.[0]?.b64_json;
+
+  if (!b64) {
+    // Try URL fallback
+    const imgUrl = data?.data?.[0]?.url;
+    if (imgUrl) {
+      console.log("[ImageEdit] Seedream returned URL, fetching...");
+      const imgRes = await fetch(imgUrl);
+      const imgBuf = Buffer.from(await imgRes.arrayBuffer());
+      return { original: originalDataUri, styled: `data:image/png;base64,${imgBuf.toString("base64")}` };
+    }
+    console.error("[ImageEdit] Seedream response:", JSON.stringify(data).slice(0, 300));
+    throw new Error("Seedream returned no image data");
+  }
+
+  console.log("[ImageEdit] Seedream success! Image base64 length:", b64.length);
+  return { original: originalDataUri, styled: `data:image/png;base64,${b64}` };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Vertex AI Gemini (fallback)                                       */
+/* ------------------------------------------------------------------ */
+
+async function enhanceWithGemini(
+  imageBase64: string,
+  originalDataUri: string,
+  prompt: string,
+  persona: string,
+  apiKey: string
+): Promise<{ original: string; styled: string }> {
+  const stylePrompt = buildStylePrompt(prompt, persona);
   const model = "gemini-3.1-flash-image-preview";
   const url = `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent?key=${apiKey}`;
 
@@ -43,13 +124,8 @@ export async function enhanceImage(
       {
         role: "user",
         parts: [
-          {
-            inline_data: {
-              mime_type: "image/jpeg",
-              data: imageBase64,
-            },
-          },
-          { text: editPrompt },
+          { inline_data: { mime_type: "image/jpeg", data: imageBase64 } },
+          { text: stylePrompt },
         ],
       },
     ],
@@ -58,7 +134,7 @@ export async function enhanceImage(
     },
   };
 
-  console.log("[ImageEdit] Sending to Vertex AI Gemini", model, "prompt length:", editPrompt.length, "image base64 length:", imageBase64.length);
+  console.log("[ImageEdit] Sending to Vertex AI Gemini", model);
 
   const response = await fetch(url, {
     method: "POST",
@@ -69,38 +145,23 @@ export async function enhanceImage(
   if (!response.ok) {
     const errBody = await response.text();
     console.error("[ImageEdit] Vertex AI error:", response.status, errBody.slice(0, 500));
-    throw new Error(`Vertex AI image edit failed (${response.status}): ${errBody.slice(0, 200)}`);
+    throw new Error(`Vertex AI failed (${response.status}): ${errBody.slice(0, 200)}`);
   }
 
   const data = await response.json();
   const parts = data?.candidates?.[0]?.content?.parts;
 
   if (!parts || parts.length === 0) {
-    console.error("[ImageEdit] No parts in Gemini response:", JSON.stringify(data).slice(0, 300));
     throw new Error("Gemini returned no content parts");
   }
 
-  // Find the image part in the response
   for (const part of parts) {
-    if (part.inlineData?.data) {
-      const mimeType = part.inlineData.mimeType || "image/png";
-      const styledDataUri = `data:${mimeType};base64,${part.inlineData.data}`;
-      console.log("[ImageEdit] Success! Styled image base64 length:", part.inlineData.data.length);
-      return { original: originalDataUri, styled: styledDataUri };
+    const inlineData = part.inlineData || part.inline_data;
+    if (inlineData?.data) {
+      const mimeType = inlineData.mimeType || inlineData.mime_type || "image/png";
+      console.log("[ImageEdit] Gemini success! Image length:", inlineData.data.length);
+      return { original: originalDataUri, styled: `data:${mimeType};base64,${inlineData.data}` };
     }
-    // Also check snake_case variant (REST API can return either)
-    if (part.inline_data?.data) {
-      const mimeType = part.inline_data.mime_type || "image/png";
-      const styledDataUri = `data:${mimeType};base64,${part.inline_data.data}`;
-      console.log("[ImageEdit] Success! Styled image base64 length:", part.inline_data.data.length);
-      return { original: originalDataUri, styled: styledDataUri };
-    }
-  }
-
-  // Log text parts for debugging
-  const textParts = parts.filter((p: Record<string, unknown>) => p.text).map((p: Record<string, unknown>) => p.text);
-  if (textParts.length > 0) {
-    console.log("[ImageEdit] Got text but no image:", textParts.join(" ").slice(0, 200));
   }
 
   throw new Error("Gemini response contained no image data");

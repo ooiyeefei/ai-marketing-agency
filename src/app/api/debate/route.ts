@@ -124,12 +124,27 @@ export async function POST(request: Request) {
           type: "system",
         });
 
-        const imageResult = await enhanceImage(
-          imageBase64, prompt, persona.name,
-          lastCaption // pass the approved caption as context for image editing
-        ).catch(() => ({ original: originalDataUri, styled: originalDataUri }));
-
-        send("image", { originalImageUrl: imageResult.original, enhancedImageUrl: imageResult.styled });
+        let imageResult: { original: string; styled: string };
+        try {
+          imageResult = await enhanceImage(
+            imageBase64, prompt, persona.name,
+            lastCaption // pass the approved caption as context for image editing
+          );
+          send("image", { originalImageUrl: imageResult.original, enhancedImageUrl: imageResult.styled });
+        } catch (imgErr) {
+          const errMsg = imgErr instanceof Error ? imgErr.message : "Image enhancement failed";
+          console.error("[Debate] Image enhancement error:", errMsg);
+          imageResult = { original: originalDataUri, styled: originalDataUri };
+          send("message", {
+            id: `error_img_${Date.now()}`,
+            agent: "review_council",
+            agentName: "Image Stylist",
+            content: `⚠️ Image enhancement unavailable: ${errMsg}. Showing original photo.`,
+            timestamp: Date.now(),
+            type: "system",
+          });
+          send("image", { originalImageUrl: originalDataUri, enhancedImageUrl: originalDataUri });
+        }
 
         send("complete", {
           originalImageUrl: imageResult.original,

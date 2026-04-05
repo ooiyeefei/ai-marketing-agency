@@ -1,77 +1,129 @@
 /**
- * Enhance a product photo for Instagram.
- * BytePlus Seedream 4.5 (primary) — uses `image` param with data URI for true i2i editing.
- * Vertex AI Gemini (fallback) — also does true image editing.
- * Throws on failure instead of silently returning original.
+ * Image enhancement with multiple provider support and multi-variation output.
+ * - BytePlus Seedream 4.5: sequential_image_generation for 3 variations in 1 call
+ * - Vertex AI Gemini: 3 parallel calls with different style prompts
+ * - MiniMax: character-only (no product i2i) — not used for image editing
+ */
+
+export interface ImageVariation {
+  provider: "seedream" | "gemini";
+  label: string;
+  dataUri: string;
+}
+
+export interface EnhanceResult {
+  original: string;
+  styled: string; // best/first variation for backward compat
+  variations: ImageVariation[];
+}
+
+/**
+ * Generate multiple enhanced variations of a product photo.
+ * Runs Seedream and Gemini in parallel, returns all results.
  */
 export async function enhanceImage(
   imageBase64: string,
   prompt: string,
   persona: string,
   postContext?: string
-): Promise<{ original: string; styled: string }> {
+): Promise<EnhanceResult> {
   const originalDataUri = `data:image/jpeg;base64,${imageBase64}`;
+  const allVariations: ImageVariation[] = [];
 
-  // Seedream with `image` (data URI) = true image editing (preserves product)
-  // `reference_image` = style inspiration only (generates different product)
+  // Run both providers in parallel
+  const promises: Promise<ImageVariation[]>[] = [];
+
   const byteplusKey = process.env.ARK_API_KEY;
   if (byteplusKey) {
-    return enhanceWithSeedream(imageBase64, originalDataUri, prompt, persona, byteplusKey);
+    promises.push(
+      seedreamVariations(imageBase64, prompt, persona, byteplusKey)
+        .catch((err) => {
+          console.error("[ImageEdit] Seedream failed:", err.message);
+          return [] as ImageVariation[];
+        })
+    );
   }
 
   const geminiKey = process.env.VERTEX_AI_API_KEY;
   if (geminiKey) {
-    return enhanceWithGemini(imageBase64, originalDataUri, prompt, persona, geminiKey);
+    promises.push(
+      geminiVariations(imageBase64, prompt, persona, geminiKey)
+        .catch((err) => {
+          console.error("[ImageEdit] Gemini failed:", err.message);
+          return [] as ImageVariation[];
+        })
+    );
   }
 
-  throw new Error("No image API key configured (ARK_API_KEY or VERTEX_AI_API_KEY)");
-}
+  if (promises.length === 0) {
+    throw new Error("No image API key configured (ARK_API_KEY or VERTEX_AI_API_KEY)");
+  }
 
-/** Build a styling-only prompt — NO caption text, NO text rendering */
-function buildStylePrompt(prompt: string, persona: string): string {
-  return [
-    `Keep this exact same product/dish but enhance the photo to professional Instagram quality.`,
-    `Product context: ${prompt}. Brand style: ${persona}.`,
-    `Photographic enhancements:`,
-    `- Professional studio lighting with warm golden tones`,
-    `- Rich cinematic color grading`,
-    `- Subtle steam, sparkle, or glow effects on the product`,
-    `- Soft bokeh/blurred background for depth`,
-    `- High saturation and contrast for an appetizing, premium look`,
-    `CRITICAL: DO NOT add any text, captions, watermarks, hashtags, logos, or overlays on the image.`,
-    `CRITICAL: Output ONLY a photograph with zero text or writing anywhere.`,
-    `The product must be clearly recognizable as the same item but with dramatically better photography.`,
-  ].join(" ");
+  const results = await Promise.all(promises);
+  for (const variations of results) {
+    allVariations.push(...variations);
+  }
+
+  if (allVariations.length === 0) {
+    throw new Error("All image providers failed");
+  }
+
+  return {
+    original: originalDataUri,
+    styled: allVariations[0].dataUri,
+    variations: allVariations,
+  };
 }
 
 /* ------------------------------------------------------------------ */
-/*  BytePlus Seedream 4.5 — true image editing via `image` data URI   */
+/*  Style prompts per variation                                        */
 /* ------------------------------------------------------------------ */
 
-async function enhanceWithSeedream(
+const STYLE_PROMPTS = {
+  warm: (prompt: string, persona: string) =>
+    `Keep this exact same product/dish. Enhance with warm golden-hour studio lighting, rich cinematic color grading, subtle steam and glow effects, soft bokeh background. Product: ${prompt}. Style: ${persona}. DO NOT add any text, captions, watermarks, or overlays. Output ONLY a photograph.`,
+
+  cool: (prompt: string, persona: string) =>
+    `Keep this exact same product/dish. Enhance with cool blue-white lighting, clean minimalist aesthetic, marble or concrete surface, sharp focus, modern premium feel. Product: ${prompt}. Style: ${persona}. DO NOT add any text, captions, watermarks, or overlays. Output ONLY a photograph.`,
+
+  moody: (prompt: string, persona: string) =>
+    `Keep this exact same product/dish. Enhance with dramatic dark moody lighting, deep shadows with spotlight on the product, rich warm accent lights in background, luxurious premium feel. Product: ${prompt}. Style: ${persona}. DO NOT add any text, captions, watermarks, or overlays. Output ONLY a photograph.`,
+};
+
+/* ------------------------------------------------------------------ */
+/*  BytePlus Seedream 4.5 — 3 variations via sequential generation    */
+/* ------------------------------------------------------------------ */
+
+async function seedreamVariations(
   imageBase64: string,
-  originalDataUri: string,
   prompt: string,
   persona: string,
   apiKey: string
-): Promise<{ original: string; styled: string }> {
-  const stylePrompt = buildStylePrompt(prompt, persona);
+): Promise<ImageVariation[]> {
   const url = "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations";
-
-  // KEY: use `image` with data URI prefix for true editing (NOT `reference_image`)
   const imageDataUri = `data:image/jpeg;base64,${imageBase64}`;
+
+  const stylePrompt = [
+    `Generate 3 professional photography variations of this exact same product/dish:`,
+    `Variation 1: Warm golden-hour studio lighting, cinematic color grading, subtle steam, soft bokeh background.`,
+    `Variation 2: Cool minimalist lighting, clean marble surface, sharp focus, modern aesthetic.`,
+    `Variation 3: Dark moody lighting, dramatic spotlight, deep shadows, luxurious premium feel.`,
+    `Product: ${prompt}. Brand: ${persona}.`,
+    `CRITICAL: Keep the exact same product in ALL variations. DO NOT add any text, captions, or watermarks.`,
+  ].join(" ");
 
   const body = {
     model: "seedream-4-5-251128",
     prompt: stylePrompt,
     image: imageDataUri,
+    sequential_image_generation: "auto",
+    sequential_image_generation_options: { max_images: 3 },
     size: "1920x1920",
     response_format: "b64_json",
     watermark: false,
-    n: 1,
   };
 
-  console.log("[ImageEdit] Sending to BytePlus Seedream 4.5 (image data URI), prompt length:", stylePrompt.length);
+  console.log("[ImageEdit] Seedream: requesting 3 sequential variations");
 
   const response = await fetch(url, {
     method: "POST",
@@ -84,88 +136,106 @@ async function enhanceWithSeedream(
 
   if (!response.ok) {
     const errBody = await response.text();
-    console.error("[ImageEdit] BytePlus error:", response.status, errBody.slice(0, 500));
-    throw new Error(`BytePlus Seedream failed (${response.status}): ${errBody.slice(0, 200)}`);
+    throw new Error(`Seedream failed (${response.status}): ${errBody.slice(0, 200)}`);
   }
 
   const data = await response.json();
-  const b64 = data?.data?.[0]?.b64_json;
+  const items = data?.data || [];
+  const labels = ["Warm Studio", "Cool Minimalist", "Dark Moody"];
 
-  if (!b64) {
-    const imgUrl = data?.data?.[0]?.url;
-    if (imgUrl) {
-      console.log("[ImageEdit] Seedream returned URL, fetching...");
-      const imgRes = await fetch(imgUrl);
-      const imgBuf = Buffer.from(await imgRes.arrayBuffer());
-      return { original: originalDataUri, styled: `data:image/png;base64,${imgBuf.toString("base64")}` };
+  const variations: ImageVariation[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const b64 = items[i]?.b64_json;
+    const imgUrl = items[i]?.url;
+    let dataUri = "";
+
+    if (b64) {
+      dataUri = `data:image/png;base64,${b64}`;
+    } else if (imgUrl) {
+      const r = await fetch(imgUrl);
+      const buf = Buffer.from(await r.arrayBuffer());
+      dataUri = `data:image/png;base64,${buf.toString("base64")}`;
     }
-    console.error("[ImageEdit] Seedream response:", JSON.stringify(data).slice(0, 300));
-    throw new Error("Seedream returned no image data");
+
+    if (dataUri) {
+      variations.push({
+        provider: "seedream",
+        label: labels[i] || `Variation ${i + 1}`,
+        dataUri,
+      });
+    }
   }
 
-  console.log("[ImageEdit] Seedream success! Image base64 length:", b64.length);
-  return { original: originalDataUri, styled: `data:image/png;base64,${b64}` };
+  console.log(`[ImageEdit] Seedream: got ${variations.length} variations`);
+  return variations;
 }
 
 /* ------------------------------------------------------------------ */
-/*  Vertex AI Gemini (fallback)                                       */
+/*  Vertex AI Gemini — 3 parallel calls with different styles         */
 /* ------------------------------------------------------------------ */
 
-async function enhanceWithGemini(
+async function geminiVariations(
   imageBase64: string,
-  originalDataUri: string,
   prompt: string,
   persona: string,
   apiKey: string
-): Promise<{ original: string; styled: string }> {
-  const stylePrompt = buildStylePrompt(prompt, persona);
+): Promise<ImageVariation[]> {
   const model = "gemini-3.1-flash-image-preview";
   const url = `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent?key=${apiKey}`;
 
-  const body = {
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { inline_data: { mime_type: "image/jpeg", data: imageBase64 } },
-          { text: stylePrompt },
-        ],
-      },
-    ],
-    generationConfig: {
-      responseModalities: ["IMAGE"],
-    },
-  };
+  const styles = [
+    { key: "warm" as const, label: "Warm Studio" },
+    { key: "cool" as const, label: "Cool Minimalist" },
+    { key: "moody" as const, label: "Dark Moody" },
+  ];
 
-  console.log("[ImageEdit] Sending to Vertex AI Gemini", model);
+  console.log("[ImageEdit] Gemini: requesting 3 parallel variations");
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const results = await Promise.all(
+    styles.map(async ({ key, label }) => {
+      const stylePrompt = STYLE_PROMPTS[key](prompt, persona);
 
-  if (!response.ok) {
-    const errBody = await response.text();
-    console.error("[ImageEdit] Vertex AI error:", response.status, errBody.slice(0, 500));
-    throw new Error(`Vertex AI failed (${response.status}): ${errBody.slice(0, 200)}`);
-  }
+      const body = {
+        contents: [{
+          role: "user",
+          parts: [
+            { inline_data: { mime_type: "image/jpeg", data: imageBase64 } },
+            { text: stylePrompt },
+          ],
+        }],
+        generationConfig: { responseModalities: ["IMAGE"] },
+      };
 
-  const data = await response.json();
-  const parts = data?.candidates?.[0]?.content?.parts;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
 
-  if (!parts || parts.length === 0) {
-    throw new Error("Gemini returned no content parts");
-  }
+      if (!res.ok) {
+        console.error(`[ImageEdit] Gemini ${label} failed:`, res.status);
+        return null;
+      }
 
-  for (const part of parts) {
-    const inlineData = part.inlineData || part.inline_data;
-    if (inlineData?.data) {
-      const mimeType = inlineData.mimeType || inlineData.mime_type || "image/png";
-      console.log("[ImageEdit] Gemini success! Image length:", inlineData.data.length);
-      return { original: originalDataUri, styled: `data:${mimeType};base64,${inlineData.data}` };
-    }
-  }
+      const data = await res.json();
+      const parts = data?.candidates?.[0]?.content?.parts || [];
 
-  throw new Error("Gemini response contained no image data");
+      for (const part of parts) {
+        const inlineData = part.inlineData || part.inline_data;
+        if (inlineData?.data) {
+          const mime = inlineData.mimeType || inlineData.mime_type || "image/png";
+          return {
+            provider: "gemini" as const,
+            label,
+            dataUri: `data:${mime};base64,${inlineData.data}`,
+          };
+        }
+      }
+      return null;
+    })
+  );
+
+  const variations = results.filter((v): v is NonNullable<typeof v> => v !== null) as ImageVariation[];
+  console.log(`[ImageEdit] Gemini: got ${variations.length} variations`);
+  return variations;
 }

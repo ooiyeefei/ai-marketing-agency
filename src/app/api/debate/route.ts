@@ -1,4 +1,5 @@
 import { enhanceImage } from "@/lib/minimax";
+import type { EnhanceResult } from "@/lib/minimax";
 import { PERSONAS } from "@/lib/personas";
 import { runDebate } from "@/lib/agents/orchestrator";
 import type { AgentMessage } from "@/lib/agents/types";
@@ -124,31 +125,36 @@ export async function POST(request: Request) {
           type: "system",
         });
 
-        let imageResult: { original: string; styled: string };
+        let imageResult: EnhanceResult;
         try {
           imageResult = await enhanceImage(
             imageBase64, prompt, persona.name,
-            lastCaption // pass the approved caption as context for image editing
+            lastCaption
           );
-          send("image", { originalImageUrl: imageResult.original, enhancedImageUrl: imageResult.styled });
+          send("image", {
+            originalImageUrl: imageResult.original,
+            enhancedImageUrl: imageResult.styled,
+            variations: imageResult.variations,
+          });
         } catch (imgErr) {
           const errMsg = imgErr instanceof Error ? imgErr.message : "Image enhancement failed";
           console.error("[Debate] Image enhancement error:", errMsg);
-          imageResult = { original: originalDataUri, styled: originalDataUri };
+          imageResult = { original: originalDataUri, styled: originalDataUri, variations: [] };
           send("message", {
             id: `error_img_${Date.now()}`,
             agent: "review_council",
             agentName: "Image Stylist",
-            content: `⚠️ Image enhancement unavailable: ${errMsg}. Showing original photo.`,
+            content: `Image enhancement unavailable: ${errMsg}. Showing original photo.`,
             timestamp: Date.now(),
             type: "system",
           });
-          send("image", { originalImageUrl: originalDataUri, enhancedImageUrl: originalDataUri });
+          send("image", { originalImageUrl: originalDataUri, enhancedImageUrl: originalDataUri, variations: [] });
         }
 
         send("complete", {
           originalImageUrl: imageResult.original,
           enhancedImageUrl: imageResult.styled,
+          variations: imageResult.variations,
           caption: lastCaption,
           hashtags: lastHashtags,
           cta: lastCta,

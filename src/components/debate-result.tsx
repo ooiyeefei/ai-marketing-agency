@@ -20,6 +20,12 @@ import type { AgentMessage } from "@/lib/agents/types";
 /*  Props                                                             */
 /* ------------------------------------------------------------------ */
 
+interface ImageVariation {
+  provider: string;
+  label: string;
+  dataUri: string;
+}
+
 interface DebateResultProps {
   caption: string | null;
   hashtags: string[];
@@ -27,6 +33,7 @@ interface DebateResultProps {
   bestPostingTime: string | null;
   enhancedImageUrl: string | null;
   styledImageUrl?: string | null;
+  variations?: ImageVariation[];
   debateMessages: AgentMessage[];
 }
 
@@ -64,6 +71,7 @@ export default function DebateResult({
   bestPostingTime,
   enhancedImageUrl,
   styledImageUrl,
+  variations = [],
   debateMessages,
 }: DebateResultProps) {
   const [captionExpanded, setCaptionExpanded] = useState(false);
@@ -173,6 +181,7 @@ export default function DebateResult({
       {displayImageUrl && (
         <div className="relative aspect-square w-full bg-[var(--surface)]">
           <img
+            data-main-image
             src={displayImageUrl}
             alt="Product photo"
             className="h-full w-full object-cover"
@@ -261,6 +270,60 @@ export default function DebateResult({
           />
         </svg>
       </div>
+
+      {/* ---- Image Variations Gallery ---- */}
+      {variations.length > 1 && (
+        <div className="px-4 py-3 border-b border-[var(--border)]">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+            AI Variations — pick your favorite
+          </p>
+          <div className="grid grid-cols-3 gap-2">
+            {variations.map((v, i) => {
+              const providerColors: Record<string, string> = {
+                seedream: "#f59e0b",
+                gemini: "#6366f1",
+              };
+              const color = providerColors[v.provider] || "#9ca3af";
+              const isSelected = v.dataUri === (showOriginal ? styledImageUrl : enhancedImageUrl);
+
+              return (
+                <button
+                  key={`${v.provider}-${i}`}
+                  type="button"
+                  onClick={() => {
+                    setShowOriginal(false);
+                    // Update the main display image
+                    const imgEl = document.querySelector<HTMLImageElement>("[data-main-image]");
+                    if (imgEl) imgEl.src = v.dataUri;
+                  }}
+                  className="relative rounded-lg overflow-hidden transition-all duration-200 group"
+                  style={{
+                    border: isSelected ? `2px solid ${color}` : "2px solid transparent",
+                    boxShadow: isSelected ? `0 0 12px ${color}40` : "none",
+                  }}
+                >
+                  <img
+                    src={v.dataUri}
+                    alt={`${v.provider} - ${v.label}`}
+                    className="w-full aspect-square object-cover"
+                  />
+                  <div
+                    className="absolute bottom-0 left-0 right-0 px-1.5 py-1 flex items-center justify-between"
+                    style={{ backgroundColor: "rgba(10,10,10,0.8)", backdropFilter: "blur(4px)" }}
+                  >
+                    <span className="text-[9px] font-bold uppercase" style={{ color }}>
+                      {v.provider}
+                    </span>
+                    <span className="text-[9px] text-gray-400 truncate ml-1">
+                      {v.label}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ---- Caption & content section ---- */}
       <div className="px-4 pb-4 space-y-3">

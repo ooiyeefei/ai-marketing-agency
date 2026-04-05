@@ -24,6 +24,7 @@ export default function HomePage() {
   const [debate, setDebate] = useState<DebateState>(INITIAL_STATE);
   const [originalImageUrl, setOriginalImageUrl] = useState<string | null>(null);
   const [styledImageUrl, setStyledImageUrl] = useState<string | null>(null);
+  const [variations, setVariations] = useState<Array<{ provider: string; label: string; dataUri: string }>>([]);
   const [isLoading, setIsLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -38,6 +39,7 @@ export default function HomePage() {
       setDebate({ ...INITIAL_STATE, status: "strategizing" });
       setOriginalImageUrl(null);
       setStyledImageUrl(null);
+      setVariations([]);
 
       formData.append("persona", selectedPersona);
 
@@ -96,6 +98,7 @@ export default function HomePage() {
                 case "image": {
                   if (event.payload.originalImageUrl) setOriginalImageUrl(event.payload.originalImageUrl);
                   if (event.payload.enhancedImageUrl) setStyledImageUrl(event.payload.enhancedImageUrl);
+                  if (event.payload.variations?.length) setVariations(event.payload.variations);
                   break;
                 }
                 case "complete": {
@@ -110,6 +113,7 @@ export default function HomePage() {
                   }));
                   if (p.originalImageUrl) setOriginalImageUrl(p.originalImageUrl);
                   if (p.enhancedImageUrl) setStyledImageUrl(p.enhancedImageUrl);
+                  if (p.variations?.length) setVariations(p.variations);
                   break;
                 }
                 case "error": {
@@ -230,6 +234,7 @@ export default function HomePage() {
               bestPostingTime={debate.bestPostingTime}
               enhancedImageUrl={styledImageUrl || originalImageUrl}
               styledImageUrl={originalImageUrl}
+              variations={variations}
               debateMessages={debate.messages}
             />
           )}

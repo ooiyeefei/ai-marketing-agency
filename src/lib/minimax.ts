@@ -1,9 +1,7 @@
-const PLACEHOLDER_IMAGE =
-  "https://placehold.co/1080x1080/6366f1/white?text=Enhanced+Image";
-
 /**
- * Enhance a product photo using OpenAI gpt-image-1 (image edit).
- * Takes the original photo and returns it enhanced for Instagram.
+ * Enhance a product photo using Vertex AI Gemini (image-to-image generation).
+ * Sends the original photo + styling prompt to gemini-3.1-flash-image-preview
+ * and returns the AI-generated styled version.
  * Throws on failure instead of silently returning original.
  */
 export async function enhanceImage(
@@ -13,13 +11,12 @@ export async function enhanceImage(
   postContext?: string
 ): Promise<{ original: string; styled: string }> {
   const originalDataUri = `data:image/jpeg;base64,${imageBase64}`;
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.VERTEX_AI_API_KEY;
 
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY not configured — cannot enhance image");
+    throw new Error("VERTEX_AI_API_KEY not configured — cannot enhance image");
   }
 
-  // Build a VERY aggressive edit prompt so the difference is clearly visible
   const contextDesc = postContext
     ? `This is for a social media post that says: "${postContext.slice(0, 300)}".`
     : "";
@@ -38,48 +35,73 @@ export async function enhanceImage(
     `The product must remain clearly recognizable but the overall mood and styling should be dramatically different from a casual phone photo.`,
   ].join(" ");
 
-  // Build multipart form data
-  const imageBuffer = Buffer.from(imageBase64, "base64");
-  const blob = new Blob([imageBuffer], { type: "image/png" });
+  const model = "gemini-3.1-flash-image-preview";
+  const url = `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent?key=${apiKey}`;
 
-  const formData = new FormData();
-  formData.append("model", "gpt-image-1");
-  formData.append("image", blob, "photo.png");
-  formData.append("prompt", editPrompt);
-  formData.append("size", "1024x1024");
+  const body = {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            inline_data: {
+              mime_type: "image/jpeg",
+              data: imageBase64,
+            },
+          },
+          { text: editPrompt },
+        ],
+      },
+    ],
+    generationConfig: {
+      responseModalities: ["TEXT", "IMAGE"],
+    },
+  };
 
-  console.log("[ImageEdit] Sending to OpenAI gpt-image-1, prompt length:", editPrompt.length, "image base64 length:", imageBase64.length);
+  console.log("[ImageEdit] Sending to Vertex AI Gemini", model, "prompt length:", editPrompt.length, "image base64 length:", imageBase64.length);
 
-  const response = await fetch("https://api.openai.com/v1/images/edits", {
+  const response = await fetch(url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: formData,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
     const errBody = await response.text();
-    console.error("[ImageEdit] OpenAI error:", response.status, errBody.slice(0, 500));
-    throw new Error(`OpenAI image edit failed (${response.status}): ${errBody.slice(0, 100)}`);
+    console.error("[ImageEdit] Vertex AI error:", response.status, errBody.slice(0, 500));
+    throw new Error(`Vertex AI image edit failed (${response.status}): ${errBody.slice(0, 200)}`);
   }
 
   const data = await response.json();
-  const b64 = data?.data?.[0]?.b64_json;
+  const parts = data?.candidates?.[0]?.content?.parts;
 
-  if (!b64) {
-    console.error("[ImageEdit] No b64_json in response. Keys:", Object.keys(data?.data?.[0] || {}));
-    // Try URL fallback
-    const url = data?.data?.[0]?.url;
-    if (url) {
-      console.log("[ImageEdit] Got URL instead of b64, fetching...");
-      const imgRes = await fetch(url);
-      const imgBuf = Buffer.from(await imgRes.arrayBuffer());
-      const styledDataUri = `data:image/png;base64,${imgBuf.toString("base64")}`;
-      return { original: originalDataUri, styled: styledDataUri };
-    }
-    throw new Error("OpenAI returned no image data (no b64_json or url)");
+  if (!parts || parts.length === 0) {
+    console.error("[ImageEdit] No parts in Gemini response:", JSON.stringify(data).slice(0, 300));
+    throw new Error("Gemini returned no content parts");
   }
 
-  const styledDataUri = `data:image/png;base64,${b64}`;
-  console.log("[ImageEdit] Success! Styled image base64 length:", b64.length);
-  return { original: originalDataUri, styled: styledDataUri };
+  // Find the image part in the response
+  for (const part of parts) {
+    if (part.inlineData?.data) {
+      const mimeType = part.inlineData.mimeType || "image/png";
+      const styledDataUri = `data:${mimeType};base64,${part.inlineData.data}`;
+      console.log("[ImageEdit] Success! Styled image base64 length:", part.inlineData.data.length);
+      return { original: originalDataUri, styled: styledDataUri };
+    }
+    // Also check snake_case variant (REST API can return either)
+    if (part.inline_data?.data) {
+      const mimeType = part.inline_data.mime_type || "image/png";
+      const styledDataUri = `data:${mimeType};base64,${part.inline_data.data}`;
+      console.log("[ImageEdit] Success! Styled image base64 length:", part.inline_data.data.length);
+      return { original: originalDataUri, styled: styledDataUri };
+    }
+  }
+
+  // Log text parts for debugging
+  const textParts = parts.filter((p: Record<string, unknown>) => p.text).map((p: Record<string, unknown>) => p.text);
+  if (textParts.length > 0) {
+    console.log("[ImageEdit] Got text but no image:", textParts.join(" ").slice(0, 200));
+  }
+
+  throw new Error("Gemini response contained no image data");
 }

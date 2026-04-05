@@ -61,8 +61,8 @@ async function enhanceWithSeedream(
   const body = {
     model: "seedream-4-5-251128",
     prompt: stylePrompt,
-    image: imageBase64,
-    size: "1024x1024",
+    reference_image: imageBase64,
+    size: "1920x1920",
     response_format: "b64_json",
     n: 1,
   };

@@ -11,18 +11,19 @@ export async function enhanceImage(
 ): Promise<{ original: string; styled: string }> {
   const originalDataUri = `data:image/jpeg;base64,${imageBase64}`;
 
-  // Try BytePlus Seedream first, fall back to Gemini
-  const byteplusKey = process.env.ARK_API_KEY;
-  if (byteplusKey) {
-    return enhanceWithSeedream(imageBase64, originalDataUri, prompt, persona, byteplusKey);
-  }
-
+  // Gemini preserves the actual product (true image editing)
+  // Seedream generates new images (doesn't keep the product)
   const geminiKey = process.env.VERTEX_AI_API_KEY;
   if (geminiKey) {
     return enhanceWithGemini(imageBase64, originalDataUri, prompt, persona, geminiKey);
   }
 
-  throw new Error("No image API key configured (ARK_API_KEY or VERTEX_AI_API_KEY)");
+  const byteplusKey = process.env.ARK_API_KEY;
+  if (byteplusKey) {
+    return enhanceWithSeedream(imageBase64, originalDataUri, prompt, persona, byteplusKey);
+  }
+
+  throw new Error("No image API key configured (VERTEX_AI_API_KEY or ARK_API_KEY)");
 }
 
 /** Build a styling-only prompt — NO caption text, NO text rendering */
@@ -130,7 +131,7 @@ async function enhanceWithGemini(
       },
     ],
     generationConfig: {
-      responseModalities: ["TEXT", "IMAGE"],
+      responseModalities: ["IMAGE"],
     },
   };
 

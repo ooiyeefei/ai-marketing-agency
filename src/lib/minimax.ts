@@ -1,6 +1,7 @@
 /**
  * Enhance a product photo for Instagram.
- * Supports BytePlus Seedream 4.5 (primary) with Vertex AI Gemini fallback.
+ * BytePlus Seedream 4.5 (primary) — uses `image` param with data URI for true i2i editing.
+ * Vertex AI Gemini (fallback) — also does true image editing.
  * Throws on failure instead of silently returning original.
  */
 export async function enhanceImage(
@@ -11,27 +12,27 @@ export async function enhanceImage(
 ): Promise<{ original: string; styled: string }> {
   const originalDataUri = `data:image/jpeg;base64,${imageBase64}`;
 
-  // Gemini preserves the actual product (true image editing)
-  // Seedream generates new images (doesn't keep the product)
-  const geminiKey = process.env.VERTEX_AI_API_KEY;
-  if (geminiKey) {
-    return enhanceWithGemini(imageBase64, originalDataUri, prompt, persona, geminiKey);
-  }
-
+  // Seedream with `image` (data URI) = true image editing (preserves product)
+  // `reference_image` = style inspiration only (generates different product)
   const byteplusKey = process.env.ARK_API_KEY;
   if (byteplusKey) {
     return enhanceWithSeedream(imageBase64, originalDataUri, prompt, persona, byteplusKey);
   }
 
-  throw new Error("No image API key configured (VERTEX_AI_API_KEY or ARK_API_KEY)");
+  const geminiKey = process.env.VERTEX_AI_API_KEY;
+  if (geminiKey) {
+    return enhanceWithGemini(imageBase64, originalDataUri, prompt, persona, geminiKey);
+  }
+
+  throw new Error("No image API key configured (ARK_API_KEY or VERTEX_AI_API_KEY)");
 }
 
 /** Build a styling-only prompt — NO caption text, NO text rendering */
 function buildStylePrompt(prompt: string, persona: string): string {
   return [
-    `Reimagine this product photo as a stunning, professional Instagram-worthy image.`,
+    `Keep this exact same product/dish but enhance the photo to professional Instagram quality.`,
     `Product context: ${prompt}. Brand style: ${persona}.`,
-    `Apply these photographic enhancements:`,
+    `Photographic enhancements:`,
     `- Professional studio lighting with warm golden tones`,
     `- Rich cinematic color grading`,
     `- Subtle steam, sparkle, or glow effects on the product`,
@@ -39,12 +40,12 @@ function buildStylePrompt(prompt: string, persona: string): string {
     `- High saturation and contrast for an appetizing, premium look`,
     `CRITICAL: DO NOT add any text, captions, watermarks, hashtags, logos, or overlays on the image.`,
     `CRITICAL: Output ONLY a photograph with zero text or writing anywhere.`,
-    `The product must be clearly recognizable as the same item but shot in a dramatically different, professional style.`,
+    `The product must be clearly recognizable as the same item but with dramatically better photography.`,
   ].join(" ");
 }
 
 /* ------------------------------------------------------------------ */
-/*  BytePlus Seedream 4.5                                             */
+/*  BytePlus Seedream 4.5 — true image editing via `image` data URI   */
 /* ------------------------------------------------------------------ */
 
 async function enhanceWithSeedream(
@@ -55,20 +56,22 @@ async function enhanceWithSeedream(
   apiKey: string
 ): Promise<{ original: string; styled: string }> {
   const stylePrompt = buildStylePrompt(prompt, persona);
-
-  // Seedream 4.5 image-to-image via BytePlus Ark API
   const url = "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations";
+
+  // KEY: use `image` with data URI prefix for true editing (NOT `reference_image`)
+  const imageDataUri = `data:image/jpeg;base64,${imageBase64}`;
 
   const body = {
     model: "seedream-4-5-251128",
     prompt: stylePrompt,
-    reference_image: imageBase64,
+    image: imageDataUri,
     size: "1920x1920",
     response_format: "b64_json",
+    watermark: false,
     n: 1,
   };
 
-  console.log("[ImageEdit] Sending to BytePlus Seedream 4.5, prompt length:", stylePrompt.length);
+  console.log("[ImageEdit] Sending to BytePlus Seedream 4.5 (image data URI), prompt length:", stylePrompt.length);
 
   const response = await fetch(url, {
     method: "POST",
@@ -89,7 +92,6 @@ async function enhanceWithSeedream(
   const b64 = data?.data?.[0]?.b64_json;
 
   if (!b64) {
-    // Try URL fallback
     const imgUrl = data?.data?.[0]?.url;
     if (imgUrl) {
       console.log("[ImageEdit] Seedream returned URL, fetching...");

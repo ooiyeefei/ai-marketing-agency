@@ -13,6 +13,7 @@ import {
   Sparkles,
   Shield,
   Send,
+  RefreshCw,
 } from "lucide-react";
 import type { AgentMessage } from "@/lib/agents/types";
 
@@ -35,6 +36,8 @@ interface DebateResultProps {
   styledImageUrl?: string | null;
   variations?: ImageVariation[];
   debateMessages: AgentMessage[];
+  onRegenerateImages?: () => void;
+  isRegenerating?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -73,6 +76,8 @@ export default function DebateResult({
   styledImageUrl,
   variations = [],
   debateMessages,
+  onRegenerateImages,
+  isRegenerating = false,
 }: DebateResultProps) {
   const [captionExpanded, setCaptionExpanded] = useState(false);
   const [copiedCaption, setCopiedCaption] = useState(false);
@@ -461,6 +466,26 @@ export default function DebateResult({
               </>
             )}
           </button>
+
+          {onRegenerateImages && (
+            <button
+              onClick={onRegenerateImages}
+              disabled={isRegenerating}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition-all duration-200"
+              style={{
+                backgroundColor: isRegenerating
+                  ? "rgba(99,102,241,0.15)"
+                  : "var(--surface-light)",
+                color: isRegenerating ? "#818cf8" : "#9ca3af",
+                border: isRegenerating
+                  ? "1px solid rgba(99,102,241,0.3)"
+                  : "1px solid transparent",
+              }}
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isRegenerating ? "animate-spin" : ""}`} />
+              {isRegenerating ? "Regenerating..." : "Regenerate Images"}
+            </button>
+          )}
         </div>
 
         {/* ---- Debate audit trail (collapsible) ---- */}

@@ -8,6 +8,7 @@ import PersonaSelector from "@/components/persona-selector";
 import UploadForm from "@/components/upload-form";
 import DebatePanel from "@/components/debate-panel";
 import DebateResult from "@/components/debate-result";
+import SessionList from "@/components/session-list";
 
 const INITIAL_STATE: DebateState = {
   messages: [],
@@ -26,21 +27,107 @@ export default function HomePage() {
   const [styledImageUrl, setStyledImageUrl] = useState<string | null>(null);
   const [variations, setVariations] = useState<Array<{ provider: string; label: string; dataUri: string }>>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Save completed session to DB
+  const saveSession = useCallback(
+    async (completePayload: Record<string, unknown>, msgs: AgentMessage[], vars: Array<{ provider: string; label: string; dataUri: string }>, userPrompt: string) => {
+      try {
+        const res = await fetch("/api/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            persona: selectedPersona,
+            prompt: userPrompt || "untitled",
+            originalImageUrl: completePayload.originalImageUrl,
+            debateMessages: msgs,
+            caption: completePayload.caption,
+            hashtags: completePayload.hashtags,
+            cta: completePayload.cta,
+            bestPostingTime: completePayload.bestPostingTime,
+            enhancedImageUrl: completePayload.enhancedImageUrl,
+            variations: vars,
+          }),
+        });
+        const data = await res.json();
+        if (data.id) {
+          setSessionId(data.id);
+          setSessionRefreshKey((k) => k + 1);
+        }
+      } catch (err) {
+        console.error("Failed to save session:", err);
+      }
+    },
+    [selectedPersona]
+  );
+
+  // Regenerate images only (skip debate)
+  const handleRegenerateImages = useCallback(async () => {
+    if (!sessionId) return;
+    setIsRegenerating(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/regenerate-images`, { method: "POST" });
+      const data = await res.json();
+      if (data.enhancedImageUrl) setStyledImageUrl(data.enhancedImageUrl);
+      if (data.variations?.length) setVariations(data.variations);
+      setSessionRefreshKey((k) => k + 1);
+    } catch (err) {
+      console.error("Regenerate failed:", err);
+    } finally {
+      setIsRegenerating(false);
+    }
+  }, [sessionId]);
+
+  // Load a past session
+  const handleLoadSession = useCallback(async (id: string) => {
+    try {
+      const res = await fetch(`/api/sessions/${id}`);
+      const s = await res.json();
+      if (s.error) return;
+
+      setSessionId(s.id);
+      setSelectedPersona(s.persona as Persona);
+      setOriginalImageUrl(s.original_image_url);
+      setStyledImageUrl(s.enhanced_image_url);
+      setVariations(s.variations || []);
+      setDebate({
+        messages: s.debate_messages || [],
+        status: "complete",
+        captionVariants: [],
+        finalCaption: s.caption,
+        finalHashtags: s.hashtags || [],
+        finalCta: s.cta,
+        bestPostingTime: s.best_posting_time,
+      });
+    } catch (err) {
+      console.error("Failed to load session:", err);
+    }
+  }, []);
+
+  // Keep a ref to latest messages and variations for save
+  const messagesRef = useRef<AgentMessage[]>([]);
+  const variationsRef = useRef<typeof variations>([]);
 
   const handleSubmit = useCallback(
     async (formData: FormData) => {
-      // Abort any in-flight request
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
 
       setIsLoading(true);
+      setSessionId(null);
       setDebate({ ...INITIAL_STATE, status: "strategizing" });
       setOriginalImageUrl(null);
       setStyledImageUrl(null);
       setVariations([]);
+      messagesRef.current = [];
+      variationsRef.current = [];
 
+      // Store prompt for session saving
+      const promptText = formData.get("prompt") as string || "";
       formData.append("persona", selectedPersona);
 
       try {
@@ -50,9 +137,7 @@ export default function HomePage() {
           signal: controller.signal,
         });
 
-        if (!res.ok) {
-          throw new Error(`Server error: ${res.status}`);
-        }
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
 
         const reader = res.body?.getReader();
         if (!reader) throw new Error("No response stream");
@@ -78,8 +163,8 @@ export default function HomePage() {
               switch (event.type) {
                 case "message": {
                   const msg = event.payload as AgentMessage;
+                  messagesRef.current = [...messagesRef.current, msg];
                   setDebate((prev) => {
-                    // Derive status from message type
                     const statusMap: Record<string, DebateState["status"]> = {
                       strategy: "strategizing",
                       draft: "drafting",
@@ -98,7 +183,10 @@ export default function HomePage() {
                 case "image": {
                   if (event.payload.originalImageUrl) setOriginalImageUrl(event.payload.originalImageUrl);
                   if (event.payload.enhancedImageUrl) setStyledImageUrl(event.payload.enhancedImageUrl);
-                  if (event.payload.variations?.length) setVariations(event.payload.variations);
+                  if (event.payload.variations?.length) {
+                    setVariations(event.payload.variations);
+                    variationsRef.current = event.payload.variations;
+                  }
                   break;
                 }
                 case "complete": {
@@ -113,7 +201,17 @@ export default function HomePage() {
                   }));
                   if (p.originalImageUrl) setOriginalImageUrl(p.originalImageUrl);
                   if (p.enhancedImageUrl) setStyledImageUrl(p.enhancedImageUrl);
-                  if (p.variations?.length) setVariations(p.variations);
+                  if (p.variations?.length) {
+                    setVariations(p.variations);
+                    variationsRef.current = p.variations;
+                  }
+                  // Auto-save session
+                  saveSession(
+                    p,
+                    messagesRef.current,
+                    variationsRef.current,
+                    promptText
+                  );
                   break;
                 }
                 case "error": {
@@ -163,7 +261,7 @@ export default function HomePage() {
         setIsLoading(false);
       }
     },
-    [selectedPersona]
+    [selectedPersona, saveSession]
   );
 
   const hasResult = debate.status === "complete" && debate.finalCaption;
@@ -210,13 +308,17 @@ export default function HomePage() {
 
       {/* Main Content */}
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-5">
-        {/* Left Column: Form (2/5 width) */}
+        {/* Left Column: Form + Past Sessions (2/5 width) */}
         <div className="space-y-6 lg:col-span-2">
           <PersonaSelector
             selected={selectedPersona}
             onSelect={setSelectedPersona}
           />
           <UploadForm onSubmit={handleSubmit} isLoading={isLoading} />
+          <SessionList
+            onLoadSession={handleLoadSession}
+            refreshKey={sessionRefreshKey}
+          />
         </div>
 
         {/* Right Column: Debate + Result (3/5 width) */}
@@ -236,6 +338,8 @@ export default function HomePage() {
               styledImageUrl={originalImageUrl}
               variations={variations}
               debateMessages={debate.messages}
+              onRegenerateImages={sessionId ? handleRegenerateImages : undefined}
+              isRegenerating={isRegenerating}
             />
           )}
         </div>

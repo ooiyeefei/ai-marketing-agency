@@ -213,7 +213,7 @@ async function geminiScene(
 }
 
 /* ------------------------------------------------------------------ */
-/*  OpenAI gpt-image-1.5: High-fidelity edit with creative scene      */
+/*  OpenAI GPT-4.1 Responses API: Creative scene from reference image */
 /* ------------------------------------------------------------------ */
 
 async function openaiScene(
@@ -224,31 +224,36 @@ async function openaiScene(
   apiKey: string
 ): Promise<ImageVariation> {
   const scenePrompt = [
-    `Reimagine this product photo for an Instagram marketing campaign.`,
+    `Using this product photo as reference, create a completely new professional`,
+    `Instagram marketing photo of the SAME product in a creative lifestyle scene.`,
     `The post narrative: "${narrative.slice(0, 400)}"`,
     `Product: ${prompt}. Brand: ${persona}.`,
-    `Create a professional marketing scene — place the product in an aspirational,`,
-    `lifestyle setting that matches the narrative. Different angle, creative staging.`,
-    `The product must be clearly recognizable as the same item.`,
+    `Show the product in an aspirational setting that matches the narrative —`,
+    `different angle, different environment, creative staging and props.`,
+    `The product must be clearly recognizable as the same item from the reference.`,
     `DO NOT add any text, captions, watermarks, or overlays. Only photograph.`,
   ].join(" ");
 
-  // Build multipart form data for /v1/images/edits
-  const imageBuffer = Buffer.from(imageBase64, "base64");
-  const blob = new Blob([imageBuffer], { type: "image/png" });
+  console.log("[ImageEdit] OpenAI: creative scene via Responses API (gpt-4.1)");
 
-  const formData = new FormData();
-  formData.append("model", "gpt-image-1");
-  formData.append("image", blob, "photo.png");
-  formData.append("prompt", scenePrompt);
-  formData.append("size", "1024x1024");
-
-  console.log("[ImageEdit] OpenAI: narrative-driven scene (gpt-image-1)");
-
-  const response = await fetch("https://api.openai.com/v1/images/edits", {
+  // Use Responses API with image_generation tool for creative reimagination
+  const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: formData,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4.1",
+      input: [{
+        role: "user",
+        content: [
+          { type: "input_text", text: scenePrompt },
+          { type: "input_image", image_url: `data:image/jpeg;base64,${imageBase64}` },
+        ],
+      }],
+      tools: [{ type: "image_generation" }],
+    }),
   });
 
   if (!response.ok) {
@@ -257,19 +262,17 @@ async function openaiScene(
   }
 
   const data = await response.json();
-  const b64 = data?.data?.[0]?.b64_json;
-  const imgUrl = data?.data?.[0]?.url;
+  const imageOutputs = (data?.output || []).filter(
+    (o: { type: string }) => o.type === "image_generation_call"
+  );
 
-  if (b64) {
+  if (imageOutputs.length > 0 && imageOutputs[0].result) {
     console.log("[ImageEdit] OpenAI: success");
-    return { provider: "openai", label: "GPT Image", dataUri: `data:image/png;base64,${b64}` };
-  }
-
-  if (imgUrl) {
-    console.log("[ImageEdit] OpenAI: success (url)");
-    const r = await fetch(imgUrl);
-    const buf = Buffer.from(await r.arrayBuffer());
-    return { provider: "openai", label: "GPT Image", dataUri: `data:image/png;base64,${buf.toString("base64")}` };
+    return {
+      provider: "openai",
+      label: "GPT Creative",
+      dataUri: `data:image/png;base64,${imageOutputs[0].result}`,
+    };
   }
 
   throw new Error("OpenAI returned no image data");

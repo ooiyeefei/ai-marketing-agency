@@ -4,6 +4,9 @@ import { PERSONAS } from "@/lib/personas";
 import { runDebate } from "@/lib/agents/orchestrator";
 import type { AgentMessage } from "@/lib/agents/types";
 
+// Debate + 3 image providers need up to 2-3 min total
+export const maxDuration = 180;
+
 /** Convert a File from FormData into a base64 string. */
 async function fileToBase64(file: File): Promise<string> {
   const arrayBuffer = await file.arrayBuffer();

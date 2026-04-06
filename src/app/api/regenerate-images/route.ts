@@ -1,6 +1,6 @@
 import { enhanceImage } from "@/lib/minimax";
 
-export const maxDuration = 60;
+export const maxDuration = 180;
 
 /** POST — regenerate images from provided data (no DB needed) */
 export async function POST(request: Request) {

@@ -200,29 +200,14 @@ export async function POST(request: Request) {
       reasoning: copyResult.reasoning,
     };
 
-    // Optionally store in Supabase (don't fail if not configured)
+    // Optionally store in DB (don't fail if not configured)
     try {
-      const supabase = createServerClient();
+      const db = createServerClient();
 
-      // Upload original image to storage
-      const fileName = `${Date.now()}-${image.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
-      const { data: uploadData } = await supabase.storage
-        .from("product-photos")
-        .upload(fileName, Buffer.from(imageBase64, "base64"), {
-          contentType: image.type,
-          upsert: false,
-        });
-
-      // Store post metadata
-      if (uploadData) {
-        const { data: { publicUrl } } = supabase.storage
-          .from("product-photos")
-          .getPublicUrl(fileName);
-
-        await supabase.from("posts").insert({
+      await db.from("posts").insert({
           persona: persona.name,
           prompt,
-          original_image_url: publicUrl,
+          original_image_url: imageResult.original,
           enhanced_image_url: imageResult.original,
           caption: copyResult.caption,
           hashtags: copyResult.hashtags,
@@ -231,7 +216,6 @@ export async function POST(request: Request) {
           reasoning: copyResult.reasoning,
           created_at: new Date().toISOString(),
         });
-      }
     } catch (storageError) {
       // Supabase not configured or bucket doesn't exist -- that's fine
       console.log("Supabase storage skipped:", storageError instanceof Error ? storageError.message : "not configured");

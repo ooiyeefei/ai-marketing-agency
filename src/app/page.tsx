@@ -9,6 +9,7 @@ import UploadForm from "@/components/upload-form";
 import DebatePanel from "@/components/debate-panel";
 import DebateResult from "@/components/debate-result";
 import SessionList from "@/components/session-list";
+import { saveSession as saveToStorage, updateSessionImages, type SavedSession } from "@/lib/session-storage";
 
 const INITIAL_STATE: DebateState = {
   messages: [],
@@ -32,31 +33,24 @@ export default function HomePage() {
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Save completed session to DB
-  const saveSession = useCallback(
-    async (completePayload: Record<string, unknown>, msgs: AgentMessage[], vars: Array<{ provider: string; label: string; dataUri: string }>, userPrompt: string) => {
+  // Save completed session to localStorage
+  const saveSessionLocal = useCallback(
+    (completePayload: Record<string, unknown>, msgs: AgentMessage[], vars: Array<{ provider: string; label: string; dataUri: string }>, userPrompt: string) => {
       try {
-        const res = await fetch("/api/sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            persona: selectedPersona,
-            prompt: userPrompt || "untitled",
-            originalImageUrl: completePayload.originalImageUrl,
-            debateMessages: msgs,
-            caption: completePayload.caption,
-            hashtags: completePayload.hashtags,
-            cta: completePayload.cta,
-            bestPostingTime: completePayload.bestPostingTime,
-            enhancedImageUrl: completePayload.enhancedImageUrl,
-            variations: vars,
-          }),
+        const id = saveToStorage({
+          persona: selectedPersona,
+          prompt: userPrompt || "untitled",
+          originalImageUrl: (completePayload.originalImageUrl as string) || "",
+          enhancedImageUrl: (completePayload.enhancedImageUrl as string) || "",
+          debateMessages: msgs,
+          caption: (completePayload.caption as string) || "",
+          hashtags: (completePayload.hashtags as string[]) || [],
+          cta: (completePayload.cta as string) || "",
+          bestPostingTime: (completePayload.bestPostingTime as string) || "",
+          variations: vars,
         });
-        const data = await res.json();
-        if (data.id) {
-          setSessionId(data.id);
-          setSessionRefreshKey((k) => k + 1);
-        }
+        setSessionId(id);
+        setSessionRefreshKey((k) => k + 1);
       } catch (err) {
         console.error("Failed to save session:", err);
       }
@@ -83,38 +77,38 @@ export default function HomePage() {
       });
       const data = await res.json();
       if (data.enhancedImageUrl) setStyledImageUrl(data.enhancedImageUrl);
-      if (data.variations?.length) setVariations(data.variations);
+      if (data.variations?.length) {
+        setVariations(data.variations);
+        // Update saved session with new images
+        if (sessionId) updateSessionImages(sessionId, data.enhancedImageUrl, data.variations);
+        setSessionRefreshKey((k) => k + 1);
+      }
     } catch (err) {
       console.error("Regenerate failed:", err);
     } finally {
       setIsRegenerating(false);
     }
-  }, [debate.finalCaption, selectedPersona]);
+  }, [debate.finalCaption, selectedPersona, sessionId]);
 
-  // Load a past session
-  const handleLoadSession = useCallback(async (id: string) => {
-    try {
-      const res = await fetch(`/api/sessions/${id}`);
-      const s = await res.json();
-      if (s.error) return;
-
-      setSessionId(s.id);
-      setSelectedPersona(s.persona as Persona);
-      setOriginalImageUrl(s.original_image_url);
-      setStyledImageUrl(s.enhanced_image_url);
-      setVariations(s.variations || []);
-      setDebate({
-        messages: s.debate_messages || [],
-        status: "complete",
-        captionVariants: [],
-        finalCaption: s.caption,
-        finalHashtags: s.hashtags || [],
-        finalCta: s.cta,
-        bestPostingTime: s.best_posting_time,
-      });
-    } catch (err) {
-      console.error("Failed to load session:", err);
-    }
+  // Load a past session from localStorage
+  const handleLoadSession = useCallback((s: SavedSession) => {
+    setSessionId(s.id);
+    setSelectedPersona(s.persona as Persona);
+    setOriginalImageUrl(s.originalImageUrl);
+    setStyledImageUrl(s.enhancedImageUrl);
+    setVariations(s.variations || []);
+    // Store base64 for regen
+    const match = s.originalImageUrl?.match(/^data:[^;]+;base64,(.+)$/);
+    if (match) imageBase64Ref.current = match[1];
+    setDebate({
+      messages: (s.debateMessages || []) as AgentMessage[],
+      status: "complete",
+      captionVariants: [],
+      finalCaption: s.caption,
+      finalHashtags: s.hashtags || [],
+      finalCta: s.cta,
+      bestPostingTime: s.bestPostingTime,
+    });
   }, []);
 
   // Keep a ref to latest messages and variations for save
@@ -220,8 +214,8 @@ export default function HomePage() {
                     setVariations(p.variations);
                     variationsRef.current = p.variations;
                   }
-                  // Auto-save session
-                  saveSession(
+                  // Auto-save session to localStorage
+                  saveSessionLocal(
                     p,
                     messagesRef.current,
                     variationsRef.current,
@@ -276,7 +270,7 @@ export default function HomePage() {
         setIsLoading(false);
       }
     },
-    [selectedPersona, saveSession]
+    [selectedPersona, saveSessionLocal]
   );
 
   const hasResult = debate.status === "complete" && debate.finalCaption;

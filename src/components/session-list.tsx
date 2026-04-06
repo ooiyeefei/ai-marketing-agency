@@ -2,19 +2,11 @@
 
 import { useState, useEffect } from "react";
 import { Clock, Image as ImageIcon } from "lucide-react";
-
-interface SessionSummary {
-  id: string;
-  persona: string;
-  prompt: string;
-  caption: string | null;
-  enhanced_image_url: string | null;
-  created_at: string;
-}
+import { getSessions, type SavedSession } from "@/lib/session-storage";
 
 interface SessionListProps {
-  onLoadSession: (id: string) => void;
-  refreshKey: number; // increment to trigger refresh
+  onLoadSession: (session: SavedSession) => void;
+  refreshKey: number;
 }
 
 function timeAgo(dateStr: string): string {
@@ -36,25 +28,11 @@ const personaColors: Record<string, string> = {
 };
 
 export default function SessionList({ onLoadSession, refreshKey }: SessionListProps) {
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [sessions, setSessions] = useState<SavedSession[]>([]);
 
   useEffect(() => {
-    setLoading(true);
-    fetch("/api/sessions?limit=10")
-      .then((r) => r.json())
-      .then((d) => setSessions(d.sessions || []))
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    setSessions(getSessions());
   }, [refreshKey]);
-
-  if (loading && sessions.length === 0) {
-    return (
-      <div className="glass-card p-4">
-        <p className="text-xs text-gray-500">Loading past sessions...</p>
-      </div>
-    );
-  }
 
   if (sessions.length === 0) return null;
 
@@ -70,20 +48,18 @@ export default function SessionList({ onLoadSession, refreshKey }: SessionListPr
           <button
             key={s.id}
             type="button"
-            onClick={() => onLoadSession(s.id)}
+            onClick={() => onLoadSession(s)}
             className="w-full flex items-start gap-3 px-4 py-3 hover:bg-[var(--surface-light)]/50 transition-colors text-left border-b border-[var(--border)] last:border-b-0"
           >
-            {/* Thumbnail */}
             <div className="flex-shrink-0 w-10 h-10 rounded-md overflow-hidden bg-[var(--surface)]">
-              {s.enhanced_image_url ? (
-                <img src={s.enhanced_image_url} alt="" className="w-full h-full object-cover" />
+              {s.enhancedImageUrl ? (
+                <img src={s.enhancedImageUrl} alt="" className="w-full h-full object-cover" />
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
                   <ImageIcon className="h-4 w-4 text-gray-600" />
                 </div>
               )}
             </div>
-            {/* Info */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5 mb-0.5">
                 <div
@@ -99,7 +75,7 @@ export default function SessionList({ onLoadSession, refreshKey }: SessionListPr
               </p>
               <div className="flex items-center gap-1 mt-1">
                 <Clock className="h-2.5 w-2.5 text-gray-600" />
-                <span className="text-[9px] text-gray-600">{timeAgo(s.created_at)}</span>
+                <span className="text-[9px] text-gray-600">{timeAgo(s.createdAt)}</span>
               </div>
             </div>
           </button>

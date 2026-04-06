@@ -165,17 +165,20 @@ async function geminiScene(
   const url = `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent?key=${process.env.VERTEX_AI_API_KEY}`;
 
   const scenePrompt = [
-    `Edit this product photo for an Instagram marketing campaign.`,
+    `Create a new photo of this SAME product/dish in a completely different scenario.`,
     `The marketing post says: "${narrative.slice(0, 400)}"`,
     `Product: ${prompt}. Brand: ${persona}.`,
-    `KEEP THE EXACT SAME PRODUCT — do not change the dish/item itself at all.`,
-    `Only enhance the SETTING and STYLING around it to match the marketing narrative:`,
-    `better background, professional lighting, lifestyle props, aspirational environment.`,
-    `The product must look identical to the input — same shape, same ingredients, same style.`,
+    `RULES:`,
+    `- The product must be RECOGNIZABLY THE SAME item (same dish, same design, same ingredients)`,
+    `- But show it from a DIFFERENT ANGLE, in a DIFFERENT LOCATION, with DIFFERENT PROPS`,
+    `- Create a new lifestyle scenario: being served at a restaurant, held by someone walking outdoors,`,
+    `  displayed at a market stall, on a picnic blanket, at a food festival, on a kitchen counter, etc.`,
+    `- Match the scenario to the marketing narrative above`,
+    `- This must look like a DIFFERENT PHOTO TAKEN ON A DIFFERENT DAY, not a filter on the same photo`,
     `CRITICAL: DO NOT add any text, captions, watermarks, or overlays. Output ONLY a photograph.`,
   ].join(" ");
 
-  console.log("[ImageEdit] Gemini: product-preserving scene");
+  console.log("[ImageEdit] Gemini: same product, different scenario");
 
   const response = await fetch(url, {
     method: "POST",

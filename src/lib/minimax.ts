@@ -1,8 +1,6 @@
 /**
- * Image enhancement with multiple provider support and multi-variation output.
- * - BytePlus Seedream 4.5: sequential_image_generation for 3 variations in 1 call
- * - Vertex AI Gemini: 3 parallel calls with different style prompts
- * - MiniMax: character-only (no product i2i) — not used for image editing
+ * Image enhancement: 1 Seedream + 1 Gemini in parallel.
+ * Fast enough for serverless (2 calls, ~15s each).
  */
 
 export interface ImageVariation {
@@ -13,14 +11,20 @@ export interface ImageVariation {
 
 export interface EnhanceResult {
   original: string;
-  styled: string; // best/first variation for backward compat
+  styled: string;
   variations: ImageVariation[];
 }
 
-/**
- * Generate multiple enhanced variations of a product photo.
- * Runs Seedream and Gemini in parallel, returns all results.
- */
+/** 50-second timeout wrapper */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)
+    ),
+  ]);
+}
+
 export async function enhanceImage(
   imageBase64: string,
   prompt: string,
@@ -30,28 +34,25 @@ export async function enhanceImage(
   const originalDataUri = `data:image/jpeg;base64,${imageBase64}`;
   const allVariations: ImageVariation[] = [];
 
-  // Run both providers in parallel
-  const promises: Promise<ImageVariation[]>[] = [];
+  const promises: Promise<ImageVariation | null>[] = [];
 
   const byteplusKey = process.env.ARK_API_KEY;
   if (byteplusKey) {
     promises.push(
-      seedreamVariations(imageBase64, prompt, persona, byteplusKey)
-        .catch((err) => {
-          console.error("[ImageEdit] Seedream failed:", err.message);
-          return [] as ImageVariation[];
-        })
+      withTimeout(
+        seedreamSingle(imageBase64, prompt, persona, byteplusKey),
+        50000, "Seedream"
+      ).catch((err) => { console.error("[ImageEdit] Seedream:", err.message); return null; })
     );
   }
 
   const geminiKey = process.env.VERTEX_AI_API_KEY;
   if (geminiKey) {
     promises.push(
-      geminiVariations(imageBase64, prompt, persona, geminiKey)
-        .catch((err) => {
-          console.error("[ImageEdit] Gemini failed:", err.message);
-          return [] as ImageVariation[];
-        })
+      withTimeout(
+        geminiSingle(imageBase64, prompt, persona, geminiKey),
+        50000, "Gemini"
+      ).catch((err) => { console.error("[ImageEdit] Gemini:", err.message); return null; })
     );
   }
 
@@ -60,12 +61,12 @@ export async function enhanceImage(
   }
 
   const results = await Promise.all(promises);
-  for (const variations of results) {
-    allVariations.push(...variations);
+  for (const v of results) {
+    if (v) allVariations.push(v);
   }
 
   if (allVariations.length === 0) {
-    throw new Error("All image providers failed");
+    throw new Error("All image providers failed or timed out");
   }
 
   return {
@@ -75,55 +76,32 @@ export async function enhanceImage(
   };
 }
 
-/* ------------------------------------------------------------------ */
-/*  Style prompts per variation                                        */
-/* ------------------------------------------------------------------ */
-
-const STYLE_PROMPTS = {
-  warm: (prompt: string, persona: string) =>
-    `Keep this exact same product/dish. Enhance with warm golden-hour studio lighting, rich cinematic color grading, subtle steam and glow effects, soft bokeh background. Product: ${prompt}. Style: ${persona}. DO NOT add any text, captions, watermarks, or overlays. Output ONLY a photograph.`,
-
-  cool: (prompt: string, persona: string) =>
-    `Keep this exact same product/dish. Enhance with cool blue-white lighting, clean minimalist aesthetic, marble or concrete surface, sharp focus, modern premium feel. Product: ${prompt}. Style: ${persona}. DO NOT add any text, captions, watermarks, or overlays. Output ONLY a photograph.`,
-
-  moody: (prompt: string, persona: string) =>
-    `Keep this exact same product/dish. Enhance with dramatic dark moody lighting, deep shadows with spotlight on the product, rich warm accent lights in background, luxurious premium feel. Product: ${prompt}. Style: ${persona}. DO NOT add any text, captions, watermarks, or overlays. Output ONLY a photograph.`,
-};
+/** Styling prompt — no caption text, no text rendering */
+function buildStylePrompt(prompt: string, persona: string): string {
+  return [
+    `Keep this exact same product/dish but enhance the photo to professional Instagram quality.`,
+    `Product context: ${prompt}. Brand style: ${persona}.`,
+    `Professional studio lighting with warm golden tones, rich cinematic color grading,`,
+    `subtle steam or glow effects, soft bokeh background, high saturation and contrast.`,
+    `CRITICAL: DO NOT add any text, captions, watermarks, or overlays. Output ONLY a photograph.`,
+  ].join(" ");
+}
 
 /* ------------------------------------------------------------------ */
-/*  BytePlus Seedream 4.5 — 3 variations via sequential generation    */
+/*  BytePlus Seedream 4.5 — single image                              */
 /* ------------------------------------------------------------------ */
 
-async function seedreamVariations(
+async function seedreamSingle(
   imageBase64: string,
   prompt: string,
   persona: string,
   apiKey: string
-): Promise<ImageVariation[]> {
+): Promise<ImageVariation> {
   const url = "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations";
   const imageDataUri = `data:image/jpeg;base64,${imageBase64}`;
+  const stylePrompt = buildStylePrompt(prompt, persona);
 
-  const stylePrompt = [
-    `Generate 3 professional photography variations of this exact same product/dish:`,
-    `Variation 1: Warm golden-hour studio lighting, cinematic color grading, subtle steam, soft bokeh background.`,
-    `Variation 2: Cool minimalist lighting, clean marble surface, sharp focus, modern aesthetic.`,
-    `Variation 3: Dark moody lighting, dramatic spotlight, deep shadows, luxurious premium feel.`,
-    `Product: ${prompt}. Brand: ${persona}.`,
-    `CRITICAL: Keep the exact same product in ALL variations. DO NOT add any text, captions, or watermarks.`,
-  ].join(" ");
-
-  const body = {
-    model: "seedream-4-5-251128",
-    prompt: stylePrompt,
-    image: imageDataUri,
-    sequential_image_generation: "auto",
-    sequential_image_generation_options: { max_images: 3 },
-    size: "1920x1920",
-    response_format: "b64_json",
-    watermark: false,
-  };
-
-  console.log("[ImageEdit] Seedream: requesting 3 sequential variations");
+  console.log("[ImageEdit] Seedream: sending single variation");
 
   const response = await fetch(url, {
     method: "POST",
@@ -131,111 +109,88 @@ async function seedreamVariations(
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      model: "seedream-4-5-251128",
+      prompt: stylePrompt,
+      image: imageDataUri,
+      size: "1920x1920",
+      response_format: "b64_json",
+      watermark: false,
+      n: 1,
+    }),
   });
 
   if (!response.ok) {
-    const errBody = await response.text();
-    throw new Error(`Seedream failed (${response.status}): ${errBody.slice(0, 200)}`);
+    const err = await response.text();
+    throw new Error(`Seedream (${response.status}): ${err.slice(0, 200)}`);
   }
 
   const data = await response.json();
-  const items = data?.data || [];
-  const labels = ["Warm Studio", "Cool Minimalist", "Dark Moody"];
+  const b64 = data?.data?.[0]?.b64_json;
+  const imgUrl = data?.data?.[0]?.url;
 
-  const variations: ImageVariation[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const b64 = items[i]?.b64_json;
-    const imgUrl = items[i]?.url;
-    let dataUri = "";
-
-    if (b64) {
-      dataUri = `data:image/png;base64,${b64}`;
-    } else if (imgUrl) {
-      const r = await fetch(imgUrl);
-      const buf = Buffer.from(await r.arrayBuffer());
-      dataUri = `data:image/png;base64,${buf.toString("base64")}`;
-    }
-
-    if (dataUri) {
-      variations.push({
-        provider: "seedream",
-        label: labels[i] || `Variation ${i + 1}`,
-        dataUri,
-      });
-    }
+  let dataUri = "";
+  if (b64) {
+    dataUri = `data:image/png;base64,${b64}`;
+  } else if (imgUrl) {
+    const r = await fetch(imgUrl);
+    const buf = Buffer.from(await r.arrayBuffer());
+    dataUri = `data:image/png;base64,${buf.toString("base64")}`;
   }
 
-  console.log(`[ImageEdit] Seedream: got ${variations.length} variations`);
-  return variations;
+  if (!dataUri) throw new Error("Seedream returned no image data");
+
+  console.log("[ImageEdit] Seedream: success");
+  return { provider: "seedream", label: "Seedream 4.5", dataUri };
 }
 
 /* ------------------------------------------------------------------ */
-/*  Vertex AI Gemini — 3 parallel calls with different styles         */
+/*  Vertex AI Gemini — single image                                    */
 /* ------------------------------------------------------------------ */
 
-async function geminiVariations(
+async function geminiSingle(
   imageBase64: string,
   prompt: string,
   persona: string,
   apiKey: string
-): Promise<ImageVariation[]> {
+): Promise<ImageVariation> {
   const model = "gemini-3.1-flash-image-preview";
   const url = `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent?key=${apiKey}`;
+  const stylePrompt = buildStylePrompt(prompt, persona);
 
-  const styles = [
-    { key: "warm" as const, label: "Warm Studio" },
-    { key: "cool" as const, label: "Cool Minimalist" },
-    { key: "moody" as const, label: "Dark Moody" },
-  ];
+  console.log("[ImageEdit] Gemini: sending single variation");
 
-  console.log("[ImageEdit] Gemini: requesting 3 parallel variations");
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{
+        role: "user",
+        parts: [
+          { inline_data: { mime_type: "image/jpeg", data: imageBase64 } },
+          { text: stylePrompt },
+        ],
+      }],
+      generationConfig: { responseModalities: ["IMAGE"] },
+    }),
+  });
 
-  const results = await Promise.all(
-    styles.map(async ({ key, label }) => {
-      const stylePrompt = STYLE_PROMPTS[key](prompt, persona);
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Gemini (${response.status}): ${err.slice(0, 200)}`);
+  }
 
-      const body = {
-        contents: [{
-          role: "user",
-          parts: [
-            { inline_data: { mime_type: "image/jpeg", data: imageBase64 } },
-            { text: stylePrompt },
-          ],
-        }],
-        generationConfig: { responseModalities: ["IMAGE"] },
-      };
+  const data = await response.json();
+  const parts = data?.candidates?.[0]?.content?.parts || [];
 
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+  for (const part of parts) {
+    const inlineData = part.inlineData || part.inline_data;
+    if (inlineData?.data) {
+      const mime = inlineData.mimeType || inlineData.mime_type || "image/png";
+      console.log("[ImageEdit] Gemini: success");
+      return { provider: "gemini", label: "Gemini 3.1", dataUri: `data:${mime};base64,${inlineData.data}` };
+    }
+  }
 
-      if (!res.ok) {
-        console.error(`[ImageEdit] Gemini ${label} failed:`, res.status);
-        return null;
-      }
-
-      const data = await res.json();
-      const parts = data?.candidates?.[0]?.content?.parts || [];
-
-      for (const part of parts) {
-        const inlineData = part.inlineData || part.inline_data;
-        if (inlineData?.data) {
-          const mime = inlineData.mimeType || inlineData.mime_type || "image/png";
-          return {
-            provider: "gemini" as const,
-            label,
-            dataUri: `data:${mime};base64,${inlineData.data}`,
-          };
-        }
-      }
-      return null;
-    })
-  );
-
-  const variations = results.filter((v): v is NonNullable<typeof v> => v !== null) as ImageVariation[];
-  console.log(`[ImageEdit] Gemini: got ${variations.length} variations`);
-  return variations;
+  throw new Error("Gemini returned no image data");
 }

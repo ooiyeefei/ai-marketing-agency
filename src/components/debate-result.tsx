@@ -287,6 +287,7 @@ export default function DebateResult({
               const providerColors: Record<string, string> = {
                 seedream: "#f59e0b",
                 gemini: "#6366f1",
+                openai: "#10b981",
               };
               const color = providerColors[v.provider] || "#9ca3af";
               const isSelected = v.dataUri === (showOriginal ? styledImageUrl : enhancedImageUrl);

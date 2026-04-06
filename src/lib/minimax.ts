@@ -4,7 +4,7 @@
  */
 
 export interface ImageVariation {
-  provider: "seedream" | "gemini";
+  provider: "seedream" | "gemini" | "openai";
   label: string;
   dataUri: string;
 }
@@ -54,6 +54,16 @@ export async function enhanceImage(
         geminiScene(imageBase64, prompt, persona, narrative),
         55000, "Gemini"
       ).catch((err) => { console.error("[ImageEdit] Gemini:", err.message); return null; })
+    );
+  }
+
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (openaiKey) {
+    promises.push(
+      withTimeout(
+        openaiScene(imageBase64, prompt, persona, narrative, openaiKey),
+        55000, "OpenAI"
+      ).catch((err) => { console.error("[ImageEdit] OpenAI:", err.message); return null; })
     );
   }
 
@@ -200,4 +210,67 @@ async function geminiScene(
   }
 
   throw new Error("Gemini returned no image data");
+}
+
+/* ------------------------------------------------------------------ */
+/*  OpenAI gpt-image-1.5: High-fidelity edit with creative scene      */
+/* ------------------------------------------------------------------ */
+
+async function openaiScene(
+  imageBase64: string,
+  prompt: string,
+  persona: string,
+  narrative: string,
+  apiKey: string
+): Promise<ImageVariation> {
+  const scenePrompt = [
+    `Reimagine this product photo for an Instagram marketing campaign.`,
+    `The post narrative: "${narrative.slice(0, 400)}"`,
+    `Product: ${prompt}. Brand: ${persona}.`,
+    `Create a professional marketing scene — place the product in an aspirational,`,
+    `lifestyle setting that matches the narrative. Different angle, creative staging.`,
+    `The product must be clearly recognizable as the same item.`,
+    `DO NOT add any text, captions, watermarks, or overlays. Only photograph.`,
+  ].join(" ");
+
+  // Build multipart form data for /v1/images/edits
+  const imageBuffer = Buffer.from(imageBase64, "base64");
+  const blob = new Blob([imageBuffer], { type: "image/png" });
+
+  const formData = new FormData();
+  formData.append("model", "gpt-image-1");
+  formData.append("image", blob, "photo.png");
+  formData.append("prompt", scenePrompt);
+  formData.append("size", "1024x1024");
+
+  console.log("[ImageEdit] OpenAI: narrative-driven scene (gpt-image-1)");
+
+  const response = await fetch("https://api.openai.com/v1/images/edits", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`OpenAI (${response.status}): ${err.slice(0, 200)}`);
+  }
+
+  const data = await response.json();
+  const b64 = data?.data?.[0]?.b64_json;
+  const imgUrl = data?.data?.[0]?.url;
+
+  if (b64) {
+    console.log("[ImageEdit] OpenAI: success");
+    return { provider: "openai", label: "GPT Image", dataUri: `data:image/png;base64,${b64}` };
+  }
+
+  if (imgUrl) {
+    console.log("[ImageEdit] OpenAI: success (url)");
+    const r = await fetch(imgUrl);
+    const buf = Buffer.from(await r.arrayBuffer());
+    return { provider: "openai", label: "GPT Image", dataUri: `data:image/png;base64,${buf.toString("base64")}` };
+  }
+
+  throw new Error("OpenAI returned no image data");
 }

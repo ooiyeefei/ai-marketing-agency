@@ -101,16 +101,17 @@ async function seedreamScene(
 
   console.log("[ImageEdit] Seedream: narrative-driven scene");
 
-  // Use reference_image (not image) to generate NEW creative scenes
-  // image = subtle edits (same photo, just lighting) — NOT what we want
-  // reference_image = creative reimagination (new angle, new setting) — THIS is what we want
+  // Use `image` (data URI) to preserve the actual product in the scene
+  // reference_image = ignores the product, generates random new one (WRONG)
+  // image (data URI) + creative prompt = keeps product, changes scene (CORRECT)
+  const imageDataUri = `data:image/jpeg;base64,${imageBase64}`;
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.ARK_API_KEY}` },
     body: JSON.stringify({
       model: "seedream-4-5-251128",
       prompt: scenePrompt,
-      reference_image: imageBase64,
+      image: imageDataUri,
       size: "1920x1920",
       response_format: "b64_json",
       watermark: false,

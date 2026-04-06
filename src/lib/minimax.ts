@@ -165,17 +165,17 @@ async function geminiScene(
   const url = `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent?key=${process.env.VERTEX_AI_API_KEY}`;
 
   const scenePrompt = [
-    `Reimagine this product in a completely different creative setting for an Instagram post.`,
+    `Edit this product photo for an Instagram marketing campaign.`,
     `The marketing post says: "${narrative.slice(0, 400)}"`,
     `Product: ${prompt}. Brand: ${persona}.`,
-    `Create a NEW scene that matches the marketing narrative — different angle, different background,`,
-    `different props and styling from the original photo. Make it look like a professional`,
-    `marketing campaign shoot that brings the post story to life.`,
-    `Show the product being used or displayed in an aspirational, scroll-stopping way.`,
+    `KEEP THE EXACT SAME PRODUCT — do not change the dish/item itself at all.`,
+    `Only enhance the SETTING and STYLING around it to match the marketing narrative:`,
+    `better background, professional lighting, lifestyle props, aspirational environment.`,
+    `The product must look identical to the input — same shape, same ingredients, same style.`,
     `CRITICAL: DO NOT add any text, captions, watermarks, or overlays. Output ONLY a photograph.`,
   ].join(" ");
 
-  console.log("[ImageEdit] Gemini: narrative-driven scene");
+  console.log("[ImageEdit] Gemini: product-preserving scene");
 
   const response = await fetch(url, {
     method: "POST",

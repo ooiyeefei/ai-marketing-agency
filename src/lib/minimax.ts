@@ -85,7 +85,7 @@ async function seedreamScene(
   style: string
 ): Promise<ImageVariation> {
   const url = "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations";
-  const imageDataUri = `data:image/jpeg;base64,${imageBase64}`;
+
 
   const scenePrompt = [
     `Take this exact product and create a stunning lifestyle scene for an Instagram marketing post.`,
@@ -101,13 +101,16 @@ async function seedreamScene(
 
   console.log("[ImageEdit] Seedream: narrative-driven scene");
 
+  // Use reference_image (not image) to generate NEW creative scenes
+  // image = subtle edits (same photo, just lighting) — NOT what we want
+  // reference_image = creative reimagination (new angle, new setting) — THIS is what we want
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.ARK_API_KEY}` },
     body: JSON.stringify({
       model: "seedream-4-5-251128",
       prompt: scenePrompt,
-      image: imageDataUri,
+      reference_image: imageBase64,
       size: "1920x1920",
       response_format: "b64_json",
       watermark: false,

@@ -64,22 +64,32 @@ export default function HomePage() {
     [selectedPersona]
   );
 
-  // Regenerate images only (skip debate)
+  // Regenerate images only (skip debate) — works from React state, no DB needed
+  const imageBase64Ref = useRef<string | null>(null);
+
   const handleRegenerateImages = useCallback(async () => {
-    if (!sessionId) return;
+    if (!imageBase64Ref.current) return;
     setIsRegenerating(true);
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/regenerate-images`, { method: "POST" });
+      const res = await fetch("/api/regenerate-images", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64: imageBase64Ref.current,
+          prompt: debate.finalCaption || "",
+          persona: selectedPersona,
+          caption: debate.finalCaption,
+        }),
+      });
       const data = await res.json();
       if (data.enhancedImageUrl) setStyledImageUrl(data.enhancedImageUrl);
       if (data.variations?.length) setVariations(data.variations);
-      setSessionRefreshKey((k) => k + 1);
     } catch (err) {
       console.error("Regenerate failed:", err);
     } finally {
       setIsRegenerating(false);
     }
-  }, [sessionId]);
+  }, [debate.finalCaption, selectedPersona]);
 
   // Load a past session
   const handleLoadSession = useCallback(async (id: string) => {
@@ -181,7 +191,12 @@ export default function HomePage() {
                   break;
                 }
                 case "image": {
-                  if (event.payload.originalImageUrl) setOriginalImageUrl(event.payload.originalImageUrl);
+                  if (event.payload.originalImageUrl) {
+                    setOriginalImageUrl(event.payload.originalImageUrl);
+                    // Store base64 for regen (strip data URI prefix)
+                    const match = event.payload.originalImageUrl.match(/^data:[^;]+;base64,(.+)$/);
+                    if (match) imageBase64Ref.current = match[1];
+                  }
                   if (event.payload.enhancedImageUrl) setStyledImageUrl(event.payload.enhancedImageUrl);
                   if (event.payload.variations?.length) {
                     setVariations(event.payload.variations);
@@ -338,7 +353,7 @@ export default function HomePage() {
               styledImageUrl={originalImageUrl}
               variations={variations}
               debateMessages={debate.messages}
-              onRegenerateImages={sessionId ? handleRegenerateImages : undefined}
+              onRegenerateImages={handleRegenerateImages}
               isRegenerating={isRegenerating}
             />
           )}

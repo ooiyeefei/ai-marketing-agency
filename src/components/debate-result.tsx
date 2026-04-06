@@ -277,12 +277,12 @@ export default function DebateResult({
       </div>
 
       {/* ---- Image Variations Gallery ---- */}
-      {variations.length > 1 && (
+      {variations.length > 0 && (
         <div className="px-4 py-3 border-b border-[var(--border)]">
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
             AI Variations — pick your favorite
           </p>
-          <div className="grid grid-cols-3 gap-2">
+          <div className={`grid gap-2 ${variations.length === 1 ? "grid-cols-1" : variations.length === 2 ? "grid-cols-2" : "grid-cols-3"}`}>
             {variations.map((v, i) => {
               const providerColors: Record<string, string> = {
                 seedream: "#f59e0b",

@@ -307,16 +307,34 @@ export default function DebateResult({
                     alt={`${v.provider} - ${v.label}`}
                     className="w-full aspect-square object-cover"
                   />
-                  <div
-                    className="absolute bottom-0 left-0 right-0 px-1.5 py-1 flex items-center justify-between"
-                    style={{ backgroundColor: "rgba(10,10,10,0.8)", backdropFilter: "blur(4px)" }}
-                  >
-                    <span className="text-[9px] font-bold uppercase" style={{ color }}>
-                      {v.provider}
-                    </span>
-                    <span className="text-[9px] text-gray-400 truncate ml-1">
-                      {v.label}
-                    </span>
+                  {/* Small "i" icon — hover to reveal provider */}
+                  <div className="absolute top-1.5 right-1.5 group/info">
+                    <div
+                      className="flex h-4 w-4 items-center justify-center rounded-full text-[8px] font-bold cursor-default"
+                      style={{
+                        backgroundColor: "rgba(10,10,10,0.6)",
+                        backdropFilter: "blur(4px)",
+                        color: "#9ca3af",
+                        border: "1px solid rgba(255,255,255,0.1)",
+                      }}
+                    >
+                      i
+                    </div>
+                    <div
+                      className="absolute top-5 right-0 hidden group-hover/info:flex items-center gap-1 rounded-md px-2 py-1 whitespace-nowrap z-10"
+                      style={{
+                        backgroundColor: "rgba(10,10,10,0.9)",
+                        backdropFilter: "blur(8px)",
+                        border: "1px solid rgba(255,255,255,0.1)",
+                      }}
+                    >
+                      <span className="text-[9px] font-bold uppercase" style={{ color }}>
+                        {v.provider}
+                      </span>
+                      <span className="text-[9px] text-gray-400">
+                        {v.label}
+                      </span>
+                    </div>
                   </div>
                 </button>
               );
